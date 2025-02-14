@@ -11,12 +11,33 @@ const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 // middlewear
 app.use(
   cors({
-    origin: ["http://localhost:5173"],
+    origin: [
+      "http://localhost:5173",
+      "https://job-portal-89e0d.web.app",
+      "https://job-portal-89e0d.firebaseapp.com",
+    ],
     credentials: true,
   })
 );
 app.use(express.json());
 app.use(cookieParser());
+
+const verifyToken = (req, res, next) => {
+  const token = req.cookies?.token;
+
+  if (!token) {
+    return res.status(401).send({ message: "unauthorized access" });
+  }
+
+  // verify the token
+  jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (err, decoded) => {
+    if (err) {
+      return res.status(401).send({ message: "unauthorized access" });
+    }
+    req.user = decoded;
+    next();
+  });
+};
 
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.kbm4w.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
 
@@ -34,7 +55,7 @@ async function run() {
     // Connect the client to the server	(optional starting in v4.7)
     await client.connect();
     // Send a ping to confirm a successful connection
-    await client.db("admin").command({ ping: 1 });
+    // await client.db("admin").command({ ping: 1 });
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!"
     );
@@ -45,27 +66,25 @@ async function run() {
       .db("jobPortal")
       .collection("job_applications");
 
+    const cookieOptions = {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: process.env.NODE_ENV === "production" ? "none" : "strict",
+    };
+
     // auth related APIs
     app.post("/jwt", (req, res) => {
       const user = req.body;
       const token = jwt.sign(user, process.env.ACCESS_TOKEN_SECRET, {
-        expiresIn: "5h",
+        expiresIn: "10h",
       });
 
-      res
-        .cookie("token", token, {
-          httpOnly: true,
-          secure: false,
-        })
-        .send({ success: true });
+      res.cookie("token", token, cookieOptions).send({ success: true });
     });
 
     app.post("/logout", (req, res) => {
       res
-        .clearCookie("token", {
-          httpOnly: true,
-          secure: false,
-        })
+        .clearCookie("token", { ...cookieOptions, maxAge: 0 })
         .send({ success: true });
     });
 
@@ -96,9 +115,15 @@ async function run() {
 
     // job application apis
     // get all data, get one data, get some data [o, 1, many]
-    app.get("/job-application", async (req, res) => {
+    app.get("/job-application", verifyToken, async (req, res) => {
       const email = req.query.email;
       const query = { applicant_email: email };
+
+      console.log(req.cookies.token);
+      if (req.user.email != req.query.email) {
+        return res.status(403).send({ message: "forbidden access" });
+      }
+
       const result = await jobApplicationCollection.find(query).toArray();
 
       // fokira way to aggregate data
